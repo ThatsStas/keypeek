@@ -257,6 +257,10 @@ pub struct Settings {
     pub size: i32,
     pub font_size_multiplier: f32,
     pub auto_fit_before_ellipsis: bool,
+    /// Connect to the first discovered keyboard automatically at startup.
+    pub auto_connect: bool,
+    /// Layout export (keyboard_info.json) offered to protocols that need it.
+    pub layout_file: String,
     pub position: WindowPosition,
     pub timeout: i64,
     pub activation_delay: u32,
@@ -272,6 +276,8 @@ impl Default for Settings {
             size: 60,
             font_size_multiplier: 1.0,
             auto_fit_before_ellipsis: false,
+            auto_connect: true,
+            layout_file: String::new(),
             #[cfg(target_arch = "wasm32")]
             position: WindowPosition::Center,
             #[cfg(not(target_arch = "wasm32"))]
@@ -316,6 +322,8 @@ impl Settings {
             "auto_fit_before_ellipsis",
             self.auto_fit_before_ellipsis.to_string(),
         );
+        section.set("auto_connect", self.auto_connect.to_string());
+        section.set("layout_file", self.layout_file.clone());
         section.set("position", self.position.to_string());
         section.set("timeout", self.timeout.to_string());
         section.set("activation_delay", self.activation_delay.to_string());
@@ -348,6 +356,12 @@ impl Settings {
         }
         if let Some(val) = section.get("auto_fit_before_ellipsis") {
             s.auto_fit_before_ellipsis = val.parse().unwrap_or(s.auto_fit_before_ellipsis);
+        }
+        if let Some(val) = section.get("auto_connect") {
+            s.auto_connect = val.parse().unwrap_or(s.auto_connect);
+        }
+        if let Some(val) = section.get("layout_file") {
+            s.layout_file = val.to_string();
         }
         if let Some(val) = section.get("position") {
             if let Ok(parsed) = val.parse() {

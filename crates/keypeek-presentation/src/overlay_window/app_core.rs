@@ -38,7 +38,7 @@ impl KeyPeekAppCore {
     ) -> Self {
         let base_settings = settings_store.load();
 
-        Self {
+        let mut core = Self {
             ui: UiState {
                 settings_visible,
                 settings_error: None,
@@ -48,7 +48,17 @@ impl KeyPeekAppCore {
             settings_store,
             connection_mgr: DeviceConnectionManager::new(available_devices, ui_wake),
             editor: EditorState::new(),
+        };
+        if core.settings.active.auto_connect && !core.connection_mgr.available_devices().is_empty()
+        {
+            core.connection_mgr.select_device(0);
+            let layout_file = core.settings.active.layout_file.clone();
+            if !layout_file.is_empty() && std::path::Path::new(&layout_file).is_file() {
+                core.connection_mgr.set_layout_file_path(layout_file);
+            }
+            core.connect_selected_device();
         }
+        core
     }
 
     /// Whether any modal or editor window/sidebar is open.
