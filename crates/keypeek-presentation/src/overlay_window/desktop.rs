@@ -18,11 +18,27 @@ pub fn clear_color(is_any_window_open: bool) -> egui::Rgba {
 
 /// Top-level coordinator for desktop execution: multi-windowing, system tray,
 /// mouse passthrough, and native file dialogs.
+
+/// The settings dialog is removed in this fork; all tuning happens in
+/// `~/.config/keypeek/settings.ini`. Kept as a switch for the disabled code path.
+const SETTINGS_UI_ENABLED: bool = false;
+
 pub struct DesktopOverlayApp {
     pub(super) settings_requested: Arc<AtomicBool>,
+    /// Legacy sink from the removed SIGUSR1 settings toggle: requests are
+    /// consumed and ignored (settings live in `~/.config/keypeek/settings.ini`).
+    pub(super) settings_toggled: Arc<AtomicBool>,
     pub core: KeyPeekAppCore,
     pub(super) file_dialog: egui_file_dialog::FileDialog,
     pub(super) mouse_passthrough: Option<bool>,
+    /// Last mapping state requested for the OS window (X11 map/unmap); see
+    /// the idle-withdrawal logic in [`DesktopOverlayApp::update`].
+    window_mapped: bool,
+    /// False on the very first update pass: eframe creates the window hidden
+    /// and maps it in `post_rendering` after that pass' paint. Deciding the
+    /// mapping before that map lands would race winit's request, so the
+    /// first pass is skipped (the map's Expose event guarantees a second one).
+    first_update_done: bool,
 }
 
 pub type DesktopApp = DesktopOverlayApp;
@@ -51,9 +67,14 @@ impl DesktopOverlayApp {
     ) -> Self {
         Self {
             settings_requested,
-            core: KeyPeekAppCore::new(ui_wake, settings_store, available_devices, true),
+            settings_toggled: Arc::new(AtomicBool::new(false)),
+            core: KeyPeekAppCore::new(ui_wake, settings_store, available_devices, false),
             file_dialog: egui_file_dialog::FileDialog::new(),
             mouse_passthrough: None,
+            // The window is created mapped; the first update pass withdraws it
+            // if the overlay has nothing to show.
+            window_mapped: true,
+            first_update_done: false,
         }
     }
 
@@ -104,9 +125,11 @@ impl DesktopOverlayApp {
 
     /// Updates state, handles background tasks, and processes input before drawing.
     pub fn update(&mut self, ctx: &egui::Context, host: &mut dyn OverlayHost) {
-        if self.settings_requested.swap(false, Ordering::Relaxed) {
-            self.core.ui.settings_visible = true;
-        }
+        // Settings UI removed in this fork: all open/flip requests (tray menu,
+        // legacy flags) are consumed and ignored. Tune via
+        // ~/.config/keypeek/settings.ini instead.
+        let _ = self.settings_requested.swap(false, Ordering::Relaxed);
+        let _ = self.settings_toggled.swap(false, Ordering::Relaxed);
 
         if let Some(ConnectionEvent::RequiresLayoutFile(_)) = self.core.update_connection(ctx) {
             self.pick_layout_file();
@@ -126,6 +149,39 @@ impl DesktopOverlayApp {
         }
 
         self.sync_mouse_passthrough(host);
+
+        // Idle => withdrawn. While there is nothing to show, unmap the OS
+        // window entirely so the transparent-but-empty overlay cannot be
+        // focused or capture clicks. The window is override-redirect (see the
+        // host), so i3 never sees these requests: no re-manage, no focus, no
+        // geometry drift. The session's ui_wake wakes the event loop on the
+        // next keypress and this check remaps the window at its saved rect.
+        //
+        // The very first pass is skipped: eframe creates the window hidden
+        // and maps it in `post_rendering` after that pass' paint; requesting
+        // an unmap before that map lands would race winit's request over a
+        // different X connection. The startup repaint ticks guarantee a
+        // second pass runs.
+        if self.first_update_done {
+            let want_mapped = self.overlay_visible()
+                || self.core.is_any_window_open()
+                || self.core.ui.settings_error.is_some()
+                || self.core.ui.settings_warning.is_some()
+                || matches!(
+                    self.file_dialog.state(),
+                    egui_file_dialog::DialogState::Open
+                );
+            if want_mapped != self.window_mapped {
+                host.set_mapped(want_mapped);
+                self.window_mapped = want_mapped;
+                if want_mapped {
+                    // The newly mapped window may show a stale buffer until
+                    // the next natural repaint; don't wait for one.
+                    ctx.request_repaint();
+                }
+            }
+        }
+        self.first_update_done = true;
     }
 
     /// Shows a modal dialog with `message` and an OK button that clears `slot`.
@@ -177,7 +233,8 @@ impl DesktopOverlayApp {
                 .draw_editor_window(ctx, keyboard, profile.as_ref());
         }
 
-        if self.ui.settings_visible {
+        // Settings UI removed in this fork; kept compiled but unreachable.
+        if self.ui.settings_visible && SETTINGS_UI_ENABLED {
             self.draw_settings_window(ctx, host);
         }
 
